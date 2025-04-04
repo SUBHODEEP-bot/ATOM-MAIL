@@ -20,6 +20,12 @@ $stmt->execute();
 $result = $stmt->get_result();
 $settings = $result->num_rows > 0 ? $result->fetch_assoc() : null;
 
+// Get user's current language preference
+$stmt = $db->prepare("SELECT preferred_language, dark_mode FROM users WHERE id = ?");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$user = $stmt->get_result()->fetch_assoc();
+
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $writing_style = sanitizeInput($_POST['writing_style']);
@@ -27,23 +33,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $auto_reply_enabled = isset($_POST['auto_reply_enabled']) ? 1 : 0;
     $auto_reply_message = sanitizeInput($_POST['auto_reply_message']);
     $dark_mode = isset($_POST['dark_mode']) ? 1 : 0;
+    $preferred_language = sanitizeInput($_POST['preferred_language']);
     
-    // Update dark mode in session
+    // Update session variables
     $_SESSION['dark_mode'] = $dark_mode;
+    $_SESSION['preferred_language'] = $preferred_language;
     
-    // Update user settings
-    $stmt = $db->prepare("UPDATE users SET dark_mode = ? WHERE id = ?");
-    $stmt->bind_param("ii", $dark_mode, $user_id);
+    // Update user settings in database
+    $stmt = $db->prepare("UPDATE users SET dark_mode = ?, preferred_language = ? WHERE id = ?");
+    $stmt->bind_param("isi", $dark_mode, $preferred_language, $user_id);
     $stmt->execute();
     
     if ($settings) {
-        // Update existing settings
+        // Update existing AI settings
         $stmt = $db->prepare("UPDATE ai_settings 
                              SET writing_style = ?, response_speed = ?, auto_reply_enabled = ?, auto_reply_message = ?
                              WHERE user_id = ?");
         $stmt->bind_param("ssisi", $writing_style, $response_speed, $auto_reply_enabled, $auto_reply_message, $user_id);
     } else {
-        // Insert new settings
+        // Insert new AI settings
         $stmt = $db->prepare("INSERT INTO ai_settings 
                              (user_id, writing_style, response_speed, auto_reply_enabled, auto_reply_message)
                              VALUES (?, ?, ?, ?, ?)");
@@ -111,6 +119,17 @@ if (isset($_POST['generate_auto_reply']) && empty($_POST['auto_reply_message']))
                         <input type="checkbox" id="dark_mode" name="dark_mode" <?php echo $_SESSION['dark_mode'] ? 'checked' : ''; ?>>
                         <label for="dark_mode">Dark Mode</label>
                     </div>
+                    
+                    <div class="form-group">
+                        <label for="preferred_language">Preferred Language for AI:</label>
+                        <select id="preferred_language" name="preferred_language" required>
+                            <option value="en" <?php echo ($user['preferred_language'] ?? 'en') === 'en' ? 'selected' : ''; ?>>English</option>
+                            <option value="bn" <?php echo ($user['preferred_language'] ?? '') === 'bn' ? 'selected' : ''; ?>>বাংলা (Bengali)</option>
+                            <option value="hi" <?php echo ($user['preferred_language'] ?? '') === 'hi' ? 'selected' : ''; ?>>हिन्दी (Hindi)</option>
+                            <option value="es" <?php echo ($user['preferred_language'] ?? '') === 'es' ? 'selected' : ''; ?>>Español (Spanish)</option>
+                            <option value="fr" <?php echo ($user['preferred_language'] ?? '') === 'fr' ? 'selected' : ''; ?>>Français (French)</option>
+                        </select>
+                    </div>
                 </div>
                 
                 <div class="settings-section">
@@ -147,7 +166,7 @@ if (isset($_POST['generate_auto_reply']) && empty($_POST['auto_reply_message']))
                     <div class="form-group">
                         <label for="auto_reply_message">Auto-Reply Message:</label>
                         <textarea id="auto_reply_message" name="auto_reply_message" rows="5"><?php echo htmlspecialchars($settings['auto_reply_message'] ?? ''); ?></textarea>
-                        <button type="submit" name="generate_auto_reply" class="btn btn-small">Generate with AI</button>
+                        <button type="submit" name="generate_auto_reply" class="btn btn-small"></button>
                     </div>
                 </div>
                 

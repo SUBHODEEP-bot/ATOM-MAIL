@@ -9,6 +9,19 @@ if (!$auth->isLoggedIn()) {
 
 $user_id = $_SESSION['user_id'];
 $unread_count = getUnreadEmailCount($user_id);
+
+// Get recent emails with categories
+global $db;
+$stmt = $db->prepare("SELECT e.id, e.subject, e.body, e.created_at, e.category, u.username 
+                     FROM emails e 
+                     JOIN users u ON e.sender_id = u.id 
+                     WHERE e.recipient_id = ? 
+                     ORDER BY e.created_at DESC 
+                     LIMIT 5");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$result = $stmt->get_result();
+$recent_emails = $result->fetch_all(MYSQLI_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -18,6 +31,7 @@ $unread_count = getUnreadEmailCount($user_id);
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard | <?php echo SITE_NAME; ?></title>
     <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/ai-features.css">
     <?php if ($_SESSION['dark_mode']): ?>
         <link rel="stylesheet" href="assets/css/dark-mode.css">
     <?php endif; ?>
@@ -55,32 +69,43 @@ $unread_count = getUnreadEmailCount($user_id);
             </div>
             
             <div class="recent-emails">
-                <h2>Recent Emails</h2>
-                <?php
-                global $db;
-                $stmt = $db->prepare("SELECT e.id, e.subject, e.body, e.created_at, u.username 
-                                     FROM emails e 
-                                     JOIN users u ON e.sender_id = u.id 
-                                     WHERE e.recipient_id = ? 
-                                     ORDER BY e.created_at DESC 
-                                     LIMIT 5");
-                $stmt->bind_param("i", $user_id);
-                $stmt->execute();
-                $result = $stmt->get_result();
+                <div class="section-header">
+                    <h2>Recent Emails</h2>
+                    <div class="category-filter">
+                        <select id="categoryFilter">
+                            <option value="all">All Categories</option>
+                            <option value="Personal">Personal</option>
+                            <option value="Work">Work</option>
+                            <option value="Promotion">Promotion</option>
+                            <option value="Social">Social</option>
+                            <option value="Spam">Spam</option>
+                        </select>
+                    </div>
+                </div>
                 
-                if ($result->num_rows > 0) {
-                    while ($row = $result->fetch_assoc()) {
-                        echo '<div class="email-preview">';
-                        echo '<h4>' . htmlspecialchars($row['subject']) . '</h4>';
-                        echo '<p>From: ' . htmlspecialchars($row['username']) . '</p>';
-                        echo '<p>' . substr(htmlspecialchars($row['body']), 0, 100) . '...</p>';
-                        echo '<small>' . formatDate($row['created_at']) . '</small>';
-                        echo '</div>';
-                    }
-                } else {
-                    echo '<p>No recent emails found.</p>';
-                }
-                ?>
+                <?php if (count($recent_emails) > 0): ?>
+                    <?php foreach ($recent_emails as $email): ?>
+                        <div class="email-preview" data-category="<?php echo htmlspecialchars($email['category']); ?>">
+                            <div class="email-header">
+                                <h4><?php echo htmlspecialchars($email['subject']); ?></h4>
+                                <span class="email-category"><?php echo htmlspecialchars($email['category']); ?></span>
+                            </div>
+                            <p class="email-sender">From: <?php echo htmlspecialchars($email['username']); ?></p>
+                            <p class="email-preview-text"><?php echo substr(htmlspecialchars($email['body']), 0, 100); ?>...</p>
+                            <div class="email-footer">
+                                <small><?php echo formatDate($email['created_at']); ?></small>
+                                <button class="summarize-btn" 
+                                        data-emailid="<?php echo $email['id']; ?>" 
+                                        data-content="<?php echo htmlspecialchars($email['body']); ?>">
+                                    🧠 Summarize
+                                </button>
+                            </div>
+                            <div class="email-summary" id="summary-<?php echo $email['id']; ?>"></div>
+                        </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <p>No recent emails found.</p>
+                <?php endif; ?>
             </div>
         </main>
     </div>
@@ -89,5 +114,15 @@ $unread_count = getUnreadEmailCount($user_id);
     
     <script src="assets/js/main.js"></script>
     <script src="assets/js/darkmode.js"></script>
+    <script src="assets/js/ai-features.js"></script>
 </body>
 </html>
+
+
+<div class="card">
+    <h3>Email Timeline</h3>
+    <p>Visualize your conversations</p>
+    <a href="views/timeline.php" class="btn btn-primary">
+        🧭 View Timeline
+    </a>
+</div>
