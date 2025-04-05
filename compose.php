@@ -1,4 +1,5 @@
 <?php
+use PHPMailer\PHPMailer\Exception;
 require_once 'includes/auth.php';
 require_once 'includes/functions.php';
 require_once 'ai/gemini-integration.php';
@@ -8,21 +9,26 @@ if (!$auth->isLoggedIn()) {
     exit();
 }
 
-// Function to send email (added at the top)
-function send_email($sender_id, $recipient_id, $subject, $body) {
+// Function to send email
+function send_email($sender_id, $recipient_email, $subject, $body) {
     global $db;
     
-    // Get sender and recipient details
+    // Get sender details
     $sender_stmt = $db->prepare("SELECT email, username FROM users WHERE id = ?");
     $sender_stmt->bind_param("i", $sender_id);
     $sender_stmt->execute();
     $sender = $sender_stmt->get_result()->fetch_assoc();
-    
-    $recipient_stmt = $db->prepare("SELECT email, username FROM users WHERE id = ?");
-    $recipient_stmt->bind_param("i", $recipient_id);
+
+    // Get recipient details if exists
+    $recipient_username = explode('@', $recipient_email)[0];
+    $recipient_stmt = $db->prepare("SELECT username FROM users WHERE email = ?");
+    $recipient_stmt->bind_param("s", $recipient_email);
     $recipient_stmt->execute();
-    $recipient = $recipient_stmt->get_result()->fetch_assoc();
-    
+    $result = $recipient_stmt->get_result();
+    if ($result->num_rows === 1) {
+        $recipient_username = $result->fetch_assoc()['username'];
+    }
+
     // Email headers
     $headers = "From: " . $sender['email'] . "\r\n";
     $headers .= "Reply-To: " . $sender['email'] . "\r\n";
@@ -42,7 +48,7 @@ function send_email($sender_id, $recipient_id, $subject, $body) {
     </head>
     <body>
         <div class='email-container'>
-            <p>Hello {$recipient['username']},</p>
+            <p>Hello {$recipient_username},</p>
             <div>" . nl2br(htmlspecialchars($body)) . "</div>
             <div class='email-footer'>
                 <p>Best regards,<br>{$sender['username']}</p>
@@ -53,14 +59,57 @@ function send_email($sender_id, $recipient_id, $subject, $body) {
     ";
     
     // Send email
-    $mail_sent = mail($recipient['email'], $subject, $html_message, $headers);
+    function send_email($sender_id, $recipient_email, $subject, $body) {
+        global $db;
+        
+        // Get sender details
+        $sender_stmt = $db->prepare("SELECT email, username FROM users WHERE id = ?");
+        $sender_stmt->bind_param("i", $sender_id);
+        $sender_stmt->execute();
+        $sender = $sender_stmt->get_result()->fetch_assoc();
     
+        $mail = new PHPMailer(true);
+        
+        try {
+            // SMTP Settings
+            $mail->isSMTP();
+            $mail->Host       = 'smtp.gmail.com';
+            $mail->SMTPAuth   = true;
+            $mail->Username   = 'psubhodeep52@gmail.com'; // আপনার জিমেইল
+            $mail->Password   = 'ggox slkq oaiw lgoc'; // জিমেইল অ্যাপ পাসওয়ার্ড
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
+            $mail->Port       = 465;
+    
+            // Recipients
+            $mail->setFrom($sender['email'], $sender['username']);
+            $mail->addAddress($recipient_email);
+    
+            // Content
+            $mail->isHTML(true);
+            $mail->Subject = $subject;
+            $mail->Body    = $body;
+    
+            $mail->send();
+            
+            // Update database
+            $update_stmt = $db->prepare("UPDATE emails SET is_sent = 1, sent_at = NOW() 
+                                       WHERE sender_id = ? AND recipient_email = ? AND subject = ?
+                                       ORDER BY created_at DESC LIMIT 1");
+            $update_stmt->bind_param("iss", $sender_id, $recipient_email, $subject);
+            $update_stmt->execute();
+            
+            return true;
+        } catch (Exception $e) {
+            error_log("Mail Error: ".$mail->ErrorInfo);
+            return false;
+        }
+    }
     // Update database if email was sent
     if ($mail_sent) {
         $update_stmt = $db->prepare("UPDATE emails SET is_sent = 1, sent_at = NOW() 
-                                   WHERE sender_id = ? AND recipient_id = ? AND subject = ?
+                                   WHERE sender_id = ? AND recipient_email = ? AND subject = ?
                                    ORDER BY created_at DESC LIMIT 1");
-        $update_stmt->bind_param("iis", $sender_id, $recipient_id, $subject);
+        $update_stmt->bind_param("iss", $sender_id, $recipient_email, $subject);
         $update_stmt->execute();
         return true;
     }
@@ -68,7 +117,7 @@ function send_email($sender_id, $recipient_id, $subject, $body) {
     return false;
 }
 
-// Main application logic continues...
+// Main application logic
 $user_id = $_SESSION['user_id'];
 $error = '';
 $success = '';
@@ -87,7 +136,7 @@ while ($user = $users_result->fetch_assoc()) {
     $available_users[] = $user;
 }
 
-// Handle AI generation requests FIRST
+// Handle AI generation requests
 if (isset($_POST['generate_with_ai'])) {
     $prompt = sanitizeInput($_POST['ai_prompt']);
     $style = sanitizeInput($_POST['writing_style']);
@@ -128,43 +177,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['generate_with_ai']) 
     $scheduled_at = $is_scheduled ? sanitizeInput($_POST['scheduled_at']) : null;
     $is_schedule_active = $is_scheduled && isset($_POST['activate_schedule']) ? 1 : 0;
     
-    // Get recipient ID
-    $stmt = $db->prepare("SELECT id FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)");
-    $stmt->bind_param("ss", $recipient, $recipient);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    
-    if ($result->num_rows === 1) {
-        $recipient_id = $result->fetch_assoc()['id'];
-        
+    // Validate email format
+    if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+        $error = "Invalid email address format";
+    } else {
+        $recipient_email = $recipient;
+        $recipient_id = null;
+
+        // Check if recipient exists in system
+        $stmt = $db->prepare("SELECT id FROM users WHERE email = ?");
+        $stmt->bind_param("s", $recipient_email);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        if ($result->num_rows === 1) {
+            $recipient_id = $result->fetch_assoc()['id'];
+        }
+
         // Insert email into database
-        $stmt = $db->prepare("INSERT INTO emails (sender_id, recipient_id, subject, body, is_ai_generated, is_scheduled, scheduled_at, is_schedule_active) 
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("iissiisi", $user_id, $recipient_id, $subject, $body, $is_ai_generated, $is_scheduled, $scheduled_at, $is_schedule_active);
+        $stmt = $db->prepare("INSERT INTO emails (sender_id, recipient_id, recipient_email, subject, body, is_ai_generated, is_scheduled, scheduled_at, is_schedule_active) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->bind_param("iisssiisi", $user_id, $recipient_id, $recipient_email, $subject, $body, $is_ai_generated, $is_scheduled, $scheduled_at, $is_schedule_active);
         
         if ($stmt->execute()) {
             if ($is_scheduled && $is_schedule_active) {
                 $success = "Email scheduled successfully! It will be sent on " . date('F j, Y, g:i a', strtotime($scheduled_at));
             } else {
-                // Send immediately if not scheduled
-                if (send_email($user_id, $recipient_id, $subject, $body)) {
+                if (send_email($user_id, $recipient_email, $subject, $body)) {
                     $success = "Email sent successfully!";
                 } else {
                     $error = "Email saved but failed to send. Please try again.";
                 }
             }
-            // Clear form
             $_POST = array();
             $ai_response = '';
         } else {
             $error = "Failed to send email. Please try again.";
         }
-    } else {
-        $error = "Recipient not found. Available users: ";
-        foreach ($available_users as $user) {
-            $error .= $user['username'] . " (" . $user['email'] . "), ";
-        }
-        $error = rtrim($error, ', ');
     }
 }
 ?>
@@ -240,15 +288,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['generate_with_ai']) 
             <form method="POST" action="compose.php" class="compose-form" id="emailForm">
                 <div class="form-group">
                     <label for="recipient">To:</label>
-                    <input type="text" id="recipient" name="recipient" required 
+                    <input type="email" id="recipient" name="recipient" required 
                            list="userSuggestions" value="<?php echo isset($_POST['recipient']) ? htmlspecialchars($_POST['recipient']) : ''; ?>">
                     <datalist id="userSuggestions">
                         <?php foreach ($available_users as $user): ?>
-                            <option value="<?php echo htmlspecialchars($user['username']); ?>">
                             <option value="<?php echo htmlspecialchars($user['email']); ?>">
                         <?php endforeach; ?>
                     </datalist>
-                    <small class="hint">Start typing to see available users</small>
+                    <small class="hint">Enter email address or select from suggestions</small>
                 </div>
                 
                 <div class="form-group">
@@ -365,26 +412,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['generate_with_ai']) 
     <script src="assets/js/darkmode.js"></script>
     <script>
     document.addEventListener('DOMContentLoaded', function() {
-        // Enhanced recipient validation
+        // Email format validation
         document.getElementById('emailForm').addEventListener('submit', function(e) {
             if (e.submitter && e.submitter.name === 'send_email') {
                 const recipientInput = document.getElementById('recipient');
-                const availableUsers = <?php echo json_encode($available_users); ?>;
-                let valid = false;
+                const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
                 
-                const recipientValue = recipientInput.value.trim().toLowerCase();
-                for (const user of availableUsers) {
-                    if (user.username.toLowerCase() === recipientValue || 
-                        user.email.toLowerCase() === recipientValue) {
-                        valid = true;
-                        break;
-                    }
-                }
-                
-                if (!valid) {
+                if (!emailPattern.test(recipientInput.value.trim())) {
                     e.preventDefault();
-                    alert('Please select a valid recipient from the suggestions');
+                    alert('Please enter a valid email address');
                     recipientInput.focus();
+                    return;
                 }
 
                 // Validate scheduled time if enabled
