@@ -20,6 +20,12 @@ $stmt->execute();
 $result = $stmt->get_result();
 $settings = $result->num_rows > 0 ? $result->fetch_assoc() : null;
 
+// Get trash settings
+$stmt = $db->prepare("SELECT retention_days FROM trash_settings LIMIT 1");
+$stmt->execute();
+$trash_result = $stmt->get_result();
+$trash_settings = $trash_result->fetch_assoc() ?? ['retention_days' => 30];
+
 // Get user's current language preference
 $stmt = $db->prepare("SELECT preferred_language, dark_mode FROM users WHERE id = ?");
 $stmt->bind_param("i", $user_id);
@@ -28,6 +34,7 @@ $user = $stmt->get_result()->fetch_assoc();
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Existing fields
     $writing_style = sanitizeInput($_POST['writing_style']);
     $response_speed = sanitizeInput($_POST['response_speed']);
     $auto_reply_enabled = isset($_POST['auto_reply_enabled']) ? 1 : 0;
@@ -35,6 +42,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $dark_mode = isset($_POST['dark_mode']) ? 1 : 0;
     $preferred_language = sanitizeInput($_POST['preferred_language']);
     
+    // New trash settings field
+    $retention_days = intval($_POST['retention_days']);
+
     // Update session variables
     $_SESSION['dark_mode'] = $dark_mode;
     $_SESSION['preferred_language'] = $preferred_language;
@@ -44,24 +54,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt->bind_param("isi", $dark_mode, $preferred_language, $user_id);
     $stmt->execute();
     
+    // Existing AI settings update
     if ($settings) {
-        // Update existing AI settings
         $stmt = $db->prepare("UPDATE ai_settings 
                              SET writing_style = ?, response_speed = ?, auto_reply_enabled = ?, auto_reply_message = ?
                              WHERE user_id = ?");
         $stmt->bind_param("ssisi", $writing_style, $response_speed, $auto_reply_enabled, $auto_reply_message, $user_id);
     } else {
-        // Insert new AI settings
         $stmt = $db->prepare("INSERT INTO ai_settings 
                              (user_id, writing_style, response_speed, auto_reply_enabled, auto_reply_message)
                              VALUES (?, ?, ?, ?, ?)");
         $stmt->bind_param("issis", $user_id, $writing_style, $response_speed, $auto_reply_enabled, $auto_reply_message);
     }
     
-    if ($stmt->execute()) {
+    // Execute AI settings update
+    $ai_success = $stmt->execute();
+    
+    // Update trash settings
+    if ($trash_result->num_rows > 0) {
+        $stmt = $db->prepare("UPDATE trash_settings SET retention_days = ?");
+    } else {
+        $stmt = $db->prepare("INSERT INTO trash_settings (retention_days) VALUES (?)");
+    }
+    $stmt->bind_param("i", $retention_days);
+    $trash_success = $stmt->execute();
+
+    if ($ai_success && $trash_success) {
         $success = "Settings saved successfully!";
     } else {
-        $error = "Failed to save settings. Please try again.";
+        $error = "Failed to save some settings. Please check individual sections.";
     }
     
     // Refresh settings
@@ -70,6 +91,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt->execute();
     $result = $stmt->get_result();
     $settings = $result->fetch_assoc();
+    
+    // Refresh trash settings
+    $stmt = $db->prepare("SELECT retention_days FROM trash_settings LIMIT 1");
+    $stmt->execute();
+    $trash_settings = $stmt->get_result()->fetch_assoc();
 }
 
 // Generate auto-reply suggestion if empty
@@ -112,6 +138,20 @@ if (isset($_POST['generate_auto_reply']) && empty($_POST['auto_reply_message']))
             <?php endif; ?>
             
             <form method="POST" action="settings.php" class="settings-form">
+                <!-- New Trash Settings Section -->
+                <div class="settings-section">
+                    <h2>Trash Settings</h2>
+                    <div class="form-group">
+                        <label for="retention_days">Auto-empty trash after:</label>
+                        <input type="number" id="retention_days" name="retention_days" 
+                               value="<?php echo $trash_settings['retention_days'] ?? 30; ?>" 
+                               min="1" max="365" required>
+                        <span class="form-hint">days</span>
+                    </div>
+                    <p class="form-note">Emails in trash will be permanently deleted after this period</p>
+                </div>
+
+                <!-- Existing Sections Below (No changes made) -->
                 <div class="settings-section">
                     <h2>Appearance</h2>
                     
